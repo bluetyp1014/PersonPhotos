@@ -1,0 +1,63 @@
+# Python 快取
+**/__pycache__/
+*.py[cod]
+
+# 敏感資訊 (密碼)
+.env
+.env.local
+
+# 前端套件與編譯輸出
+node_modules/
+.next/
+out/
+build/
+
+# 作業系統暫存
+.DS_Store
+Thumbs.db
+
+.vscode/
+
+# 圖片快取目錄
+# 忽略子目錄中的快取資料夾
+backend/thumb_cache/
+backend/.thumb_cache/
+
+# 忽略所有在子目錄產生的 jpg (如果你後端會產生這些圖)
+backend/*.jpg
+backend/**/*.jpg
+backend/*.png
+backend/**/*.png
+backend/ecosystem.config.js
+
+backend/models/*.pt
+backend/models/*.pth
+
+backend/models/*
+
+backend/*.env
+backend/*.env.*
+backend/static/adjust/*
+
+# 排除前端的依賴與建置檔
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.next/
+frontend/certificates/*.pem
+frontend/certificates/*.key
+frontend/certificates/*
+frontend/*.env
+frontend/*.env.*
+frontend/public/old-system-screenshot.png
+
+# 排除所有層級的環境變數與 Python 暫存
+.env
+__pycache__/
+*.pyc
+.DS_Store
+
+
+*.bat
+ecosystem.config.js
+node.txt
