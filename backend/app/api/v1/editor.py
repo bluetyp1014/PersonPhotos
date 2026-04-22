@@ -22,6 +22,8 @@ import shutil
 from app.services import image_service
 from fastapi.responses import FileResponse
 import httpx # 建議使用 httpx 處理非同步請求
+from typing import Optional
+from pathlib import Path
 
 # 載入 .env 檔案內容
 load_dotenv()
@@ -309,26 +311,42 @@ async def clear_gpu_cache():
             gc.collect()
         return {"status": "success", "message": "GPU memory cleared"}
     except Exception as e:
-        return {"status": "error", "detail": str(e)}        
+        # 1. 把詳細的錯誤訊息印在伺服器後台（或寫入 log 檔）
+        # 這樣你自己修 bug 的時候看得到
+        print(f"檔案操作失敗: {str(e)}", exc_info=True) 
+
+        # 2. 回傳給前端一個模糊但清楚的錯誤狀態
+        # 絕對不要包含變數 e 的內容
+        raise HTTPException(
+            status_code=500, 
+            detail="伺服器處理檔案時發生錯誤，請稍後再試"
+        )     
     
 
 @router.delete("/temp-file/{filename}")
 async def delete_temp_file(filename: str):
-    # 安全檢查：只允許刪除 cleanup_ 開頭且是 jpg 的檔案
-    # if not filename.startswith("cleanup_") or ".." in filename:
-    #     raise HTTPException(status_code=400, detail="不合法的檔案請求")
+    # 1. 強制淨化：不管傳什麼，只取最後面的檔名部分
+    # 例如把 "../../../etc/passwd" 變成 "passwd"
+    safe_filename = os.path.basename(filename)
 
-    file_path = os.path.join(TEMP_DIR, filename)
+    # 2. 額外的安全限制 (強烈建議)
+    # 只允許刪除特定前綴且符合特定副檔名的檔案
+    if not (safe_filename.startswith("cleanup_") and safe_filename.endswith(".jpg")):
+        raise HTTPException(status_code=400, detail="不合法的檔案請求")
+
+    file_path = os.path.join(TEMP_DIR, safe_filename)
     
     try:
         if os.path.exists(file_path):
             os.remove(file_path)
-            print(f"已刪除不滿意的預覽圖: {filename}")
             return {"status": "success", "message": "檔案已刪除"}
         else:
-            return {"status": "not_found", "message": "檔案不存在"}
+            # 為了安全，檔案不存在也可以回傳成功，不給攻擊者探測檔案存在與否的機會
+            return {"status": "success", "message": "檔案已處理"} 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"刪除失敗: {str(e)}")
+        # 不要把 str(e) 丟出去，避免洩漏實體路徑
+        print(f"Delete failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="刪除失敗")
 
 class ApplyAdjustmentRequest(BaseModel):
     hash_id: str
@@ -338,15 +356,16 @@ class ApplyAdjustmentRequest(BaseModel):
 async def apply_adjustment(req: ApplyAdjustmentRequest, db: Session = Depends(get_db)):
     # 1. 取得照片資訊
     hash_id = req.hash_id
-    temp_filename = req.temp_filename
+    # 強制過濾檔名，
+    safe_temp_name = os.path.basename(req.temp_filename)
 
     real_id = decode_id(hash_id)
     photo = photo_service.get_photo(db, real_id)
     if not photo:
         raise HTTPException(status_code=404, detail="找不到照片紀錄")
 
-    original_path = photo.file_path # 例如: D:/photos/my_cat.jpg
-    temp_path = os.path.join(TEMP_DIR, temp_filename) # 例如: D:/temp/cleanup_abc.jpg
+    original_path = photo.file_path
+    temp_path = os.path.join(TEMP_DIR, safe_temp_name)
 
     if not os.path.exists(temp_path):
         raise HTTPException(status_code=400, detail="暫存檔案已不存在")
@@ -388,18 +407,46 @@ async def apply_adjustment(req: ApplyAdjustmentRequest, db: Session = Depends(ge
             "backup_name": os.path.basename(backup_path)
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"套用失敗: {str(e)}")
+        # 紀錄原始錯誤，但不把實體路徑丟給前端
+        print(f"Critical error in apply_adjustment: {str(e)}")
+        raise HTTPException(status_code=500, detail="伺服器處理檔案失敗")
 
 @router.get("/preview/{filename}")
 async def get_preview_image(filename: str):
-    # 🚀 安全檢查：防止路徑穿越攻擊 (Path Traversal)
-    if ".." in filename or "/" in filename or "\\" in filename:
-        raise HTTPException(status_code=400, detail="非法檔名")
+    # 將 TEMP_DIR 轉為絕對路徑的 Path 物件
+    base_path = Path(TEMP_DIR).resolve()
+    # 組合並解析最終路徑
+    file_path = (base_path / filename).resolve()
+
+    # 檢查最後的路徑是否真的在 TEMP_DIR 裡面 (防止穿越)
+    if not file_path.is_relative_to(base_path):
+        raise HTTPException(status_code=400, detail="非法存取")
+
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="預覽圖不存在")
         
-    file_path = os.path.join(TEMP_DIR, filename)
+    return FileResponse(str(file_path))
+
+class GenerateRequest(BaseModel):
+    prompt: str
+    negative_prompt: Optional[str] = "low quality, blurry, distorted, text, watermark, logo"
+    width: Optional[int] = 512  # SD 1.5 建議從 512 開始
+    height: Optional[int] = 512
+    num_inference_steps: Optional[int] = 30
+
+@router.post("/generate")
+async def ai_generate(request: GenerateRequest):
+    # 1. 呼叫服務生圖
+    image = sd_service.generate_image(request.prompt)
     
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="預覽圖已過期或不存在")
-        
-    # 直接回傳圖檔流
-    return FileResponse(file_path)        
+    # 2. 存成臨時檔案或回傳 Base64
+    # 這裡建議存到一個臨時目錄，方便前端顯示與下載
+    file_name = f"ai_{uuid.uuid4()}.png"
+    save_path = os.path.join(TEMP_DIR, file_name)
+    image.save(save_path)
+    
+    return {
+        "status": "success",
+        "preview_url": f"/static/adjust/{file_name}",
+        "temp_filename": file_name, # -- 補上這一行
+    }

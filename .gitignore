@@ -39,6 +39,7 @@ backend/*.env
 backend/*.env.*
 backend/static/adjust/*
 
+
 # 排除前端的依賴與建置檔
 frontend/node_modules/
 frontend/dist/
@@ -61,3 +62,9 @@ __pycache__/
 *.bat
 ecosystem.config.js
 node.txt
+*.bak
+
+# Cursor AI 編輯器相關
+.cursor/
+.cursor_git_history_filenames.txt
+.cursor_git_history_data
