@@ -413,14 +413,13 @@ async def apply_adjustment(req: ApplyAdjustmentRequest, db: Session = Depends(ge
 
 @router.get("/preview/{filename}")
 async def get_preview_image(filename: str):
-    # 將 TEMP_DIR 轉為絕對路徑的 Path 物件
+    safe_filename = os.path.basename(filename)
+    
     base_path = Path(TEMP_DIR).resolve()
-    # 組合並解析最終路徑
-    file_path = (base_path / filename).resolve()
+    file_path = (base_path / safe_filename).resolve()
 
-    # 檢查最後的路徑是否真的在 TEMP_DIR 裡面 (防止穿越)
     if not file_path.is_relative_to(base_path):
-        raise HTTPException(status_code=400, detail="非法存取")
+         raise HTTPException(status_code=400, detail="非法存取")
 
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="預覽圖不存在")
