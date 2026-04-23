@@ -1,70 +1,49 @@
-# Python 快取
-**/__pycache__/
+# === 全域忽略 (Global Ignores) ===
+__pycache__/
 *.py[cod]
+*$py.class
+.DS_Store
+Thumbs.db
+*.bak
+*.bat
+node.txt
+ecosystem.config.js
 
-# 敏感資訊 (密碼)
-.env
-.env.local
+# === 敏感資訊 (Secrets) ===
+.env*
+*.env*
+backend/*.env*
+frontend/*.env*
+frontend/certificates/*
 
-# 前端套件與編譯輸出
+# === 編輯器與工具 (IDE & AI Tools) ===
+.vscode/
+.cursor/
+.cursor_git_history_*
+.idea/
+
+# === 後端特定 (Backend Specific) ===
+backend/thumb_cache/
+backend/.thumb_cache/
+backend/static/adjust/*
+backend/node_modules/
+
+# 忽略 AI 模型檔 (大檔案不進 Git)
+backend/models/*
+# 如果你想保留 models 資料夾，可以取消下面這行的註解
+# !backend/models/.gitkeep
+
+# 忽略後端產生的所有暫存圖檔
+backend/**/*.jpg
+backend/**/*.png
+
+# === 前端特定 (Frontend Specific) ===
 node_modules/
+frontend/node_modules/
 .next/
 out/
 build/
-
-# 作業系統暫存
-.DS_Store
-Thumbs.db
-
-.vscode/
-
-# 圖片快取目錄
-# 忽略子目錄中的快取資料夾
-backend/thumb_cache/
-backend/.thumb_cache/
-
-# 忽略所有在子目錄產生的 jpg (如果你後端會產生這些圖)
-backend/*.jpg
-backend/**/*.jpg
-backend/*.png
-backend/**/*.png
-backend/ecosystem.config.js
-
-backend/models/*.pt
-backend/models/*.pth
-
-backend/models/*
-
-backend/*.env
-backend/*.env.*
-backend/static/adjust/*
-
-
-# 排除前端的依賴與建置檔
-frontend/node_modules/
 frontend/dist/
 frontend/build/
 frontend/.next/
-frontend/certificates/*.pem
-frontend/certificates/*.key
-frontend/certificates/*
-frontend/*.env
-frontend/*.env.*
 frontend/public/old-system-screenshot.png
-
-# 排除所有層級的環境變數與 Python 暫存
-.env
-__pycache__/
-*.pyc
-.DS_Store
-
-
-*.bat
-ecosystem.config.js
-node.txt
-*.bak
-
-# Cursor AI 編輯器相關
-.cursor/
-.cursor_git_history_filenames.txt
-.cursor_git_history_data
