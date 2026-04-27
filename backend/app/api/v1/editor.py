@@ -3,9 +3,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFi
 from pydantic import BaseModel
 from sqlmodel import Session
 import os
+import torch  # <-- 1. 確保有 import torch
 from dotenv import load_dotenv
 import io
-import torch  # <--- 補上這一行
 import uuid
 from app.database import get_db
 from app.core.utils import decode_id
@@ -25,6 +25,21 @@ import httpx # 建議使用 httpx 處理非同步請求
 from typing import Optional
 from pathlib import Path
 
+# --- 2. 萬能防禦代碼：徹底解決所有 xpu 屬性缺失問題 ---
+if not hasattr(torch, 'xpu'):
+    class UniversalMock:
+        def __init__(self, *args, **kwargs): pass
+        def is_available(self): return False
+        def device_count(self): return 0
+        # 當程式呼叫不存在的屬性或方法時，統統回傳這個
+        def __getattr__(self, name):
+            def wrapper(*args, **kwargs):
+                return None
+            return wrapper
+    
+    torch.xpu = UniversalMock()
+# --------------------------------------------------
+
 # 載入 .env 檔案內容
 load_dotenv()
 
@@ -41,9 +56,23 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 BASE_DIR = os.getcwd()
 LAMA_PATH = os.path.join(BASE_DIR, "models", "big-lama.pt")
 
-# 2. 模型實例化 (全域)
-# 這裡會佔用 3080 約 5-6GB VRAM
-inpainter = LaMaInpainter(LAMA_PATH)
+# 2. 模型實例化
+# 注意：torch 在某些 Windows 環境可能因 DLL 依賴而無法 import，
+# 若在 import-time 就初始化會造成整個後端無法啟動、PM2 無限重啟。
+inpainter = None
+
+
+def _get_lama_inpainter() -> LaMaInpainter:
+    global inpainter
+    if inpainter is None:
+        try:
+            inpainter = LaMaInpainter(LAMA_PATH)
+        except Exception as e:
+            raise HTTPException(
+                status_code=503,
+                detail=f"LaMa 模型初始化失敗（torch/DLL 依賴可能有問題）: {str(e)}",
+            )
+    return inpainter
 
 router = APIRouter()
 
@@ -51,12 +80,21 @@ router = APIRouter()
 async def smart_adjust_photo(
     hash_id: str, 
     command: str, # 例如: "幫我調亮一點，對比拉高，看起來像日系風"
+    include_rag: bool = False,
     db: Session = Depends(get_db)
 ):
     # 1. 呼叫 Ollama 將 command 轉為 亮度、對比、色溫等參數
     # 這裡要接收回傳的字典：{"exposure": 0.5, "clarity": 1.2, ...}
-    params = ai_service.get_edit_params(command)
+    rag_examples = None
+    if include_rag:
+        params, rag_examples = ai_service.get_edit_params_with_rag(command)
+    else:
+        params = ai_service.get_edit_params(command)
     
+    print(f"====== params: {params}")
+
+    print(f"====== rag_examples: {rag_examples}")
+
     # 2. 根據 hash_id 找到原始檔案路徑
     # 解碼取得真實 ID
     real_id = decode_id(hash_id)
@@ -101,7 +139,8 @@ async def smart_adjust_photo(
                 "status": "success", 
                 "preview_url": f"/static/adjust/{temp_filename}", # 確保 FastAPI 有掛載 static
                 "temp_filename": temp_filename, # -- 補上這一行
-                "params": params # 回傳參數給前端，方便顯示目前 AI 調整了什麼
+                "params": params, # 回傳參數給前端，方便顯示目前 AI 調整了什麼
+                "rag_examples": rag_examples,
             }
 
         raise HTTPException(status_code=500, detail=f"影像處理失敗")
@@ -220,7 +259,7 @@ async def remove_objects(
                 # LaMa 很輕，通常可以跟 SAM 共存，不一定要踢掉
                 # ⚡ 執行 3080 快速填充 (LaMa)
                 print("執行快速修復 (LaMa)...")
-                result_img = inpainter.inpaint(original_img, mask_img)
+                result_img = _get_lama_inpainter().inpaint(original_img, mask_img)
                
             # 3. 儲存結果並回傳路徑 (沿用你之前的 temp 存檔邏輯)
             temp_filename = f"cleanup_{uuid.uuid4().hex[:8]}.jpg"
@@ -304,11 +343,14 @@ async def clear_gpu_cache():
         except Exception as ollama_err:
             print(f"Ollama release notice: {ollama_err}")
 
-        # 強制清理 PyTorch 的快取池
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        # 強制清理 PyTorch 的快取池（如果 torch 可用）
+        # _try_clear_torch_cuda_cache()
+        try:
             import gc
+
             gc.collect()
+        except Exception:
+            pass
         return {"status": "success", "message": "GPU memory cleared"}
     except Exception as e:
         # 1. 把詳細的錯誤訊息印在伺服器後台（或寫入 log 檔）
@@ -329,9 +371,14 @@ async def delete_temp_file(filename: str):
     # 例如把 "../../../etc/passwd" 變成 "passwd"
     safe_filename = os.path.basename(filename)
 
-    # 2. 額外的安全限制 (強烈建議)
-    # 只允許刪除特定前綴且符合特定副檔名的檔案
-    if not (safe_filename.startswith("cleanup_") and safe_filename.endswith(".jpg")):
+    # 2. 安全限制：增加 ai_ 前綴與 .png 支援
+    # 檢查前綴是否為 cleanup_ 或 ai_
+    valid_prefix = safe_filename.startswith("cleanup_") or safe_filename.startswith("ai_") or safe_filename.startswith("preview_")
+    # 檢查副檔名是否為 .jpg 或 .png
+    valid_ext = safe_filename.lower().endswith((".jpg", ".png"))
+
+    if not (valid_prefix and valid_ext):
+        # 如果不符合規則，回傳 400，防止攻擊者嘗試刪除系統其他檔案
         raise HTTPException(status_code=400, detail="不合法的檔案請求")
 
     file_path = os.path.join(TEMP_DIR, safe_filename)

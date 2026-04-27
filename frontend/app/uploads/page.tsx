@@ -166,7 +166,7 @@ export default function BeautifulUploader() {
                 border-neutral-600/60 hover:border-neutral-500/80 shadow-lg shadow-black/20 cursor-pointer"
           // className="bg-neutral-700/90 hover:bg-neutral-600/90 text-neutral-100 hover:text-white border border-neutral-600/60 hover:border-neutral-500/80 shadow-lg shadow-black/20 cursor-pointer"
         >
-          ✨ 模擬抓取 Picsum 圖檔
+          ✨ Picsum 圖檔模擬上傳
         </button>
       </div>
 

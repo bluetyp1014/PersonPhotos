@@ -1,7 +1,5 @@
-import torch
 import numpy as np
 from PIL import Image
-from segment_anything import sam_model_registry, SamPredictor
 import os
 
 class SamService:
@@ -23,6 +21,9 @@ class SamService:
     def _load_model(self):
         """私有方法：當真正需要時才載入模型"""
         if self.model is None:
+            import torch  # type: ignore
+            from segment_anything import sam_model_registry, SamPredictor
+
             print(f"-- 正在加載 SAM 模型 ({self.model_type})...")
             self.model = sam_model_registry[self.model_type](checkpoint=self.checkpoint_path)
             self.model.to(device="cuda")
@@ -60,12 +61,17 @@ class SamService:
     def release_model(self):
         """強制釋放顯存"""
         if self.model is not None:
+            try:
+                import torch  # type: ignore
+            except Exception:
+                torch = None
+
             print("-- 正在釋放 SAM 模型顯存...")
             del self.model
             del self.predictor
             self.model = None
             self.predictor = None
-            if torch.cuda.is_available():
+            if torch is not None and torch.cuda.is_available():
                 torch.cuda.empty_cache()
             print("-- 顯存已清理")
 

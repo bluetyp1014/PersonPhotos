@@ -41,7 +41,7 @@ async def handle_photo_upload(db: Session, file: UploadFile):
     target_dir = settings.target_dir
 
     # -- 關鍵修正：確保最頂層的基礎資料夾存在
-    # 如果 D:\Sorted_test 不存在，這行會幫你建好
+    # 如果 D:\Sorted_test 不存在
     os.makedirs(target_dir, exist_ok=True)
 
     # 1. 建立初始暫存路徑 (直接串流寫入，不經過 await file.read())

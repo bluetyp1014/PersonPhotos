@@ -1,5 +1,3 @@
-from diffusers import StableDiffusionInpaintPipeline
-import torch
 import os
 from PIL import Image
 import numpy as np
@@ -23,8 +21,12 @@ class SdService:
     def _load_model(self):
         """當使用者第一次勾選高級修復時才載入，節省 3080 顯存"""
         if self.pipe is None:
+            import torch  # type: ignore
+            from diffusers import StableDiffusionInpaintPipeline
+
             print("-- 正在載入 Stable Diffusion 高級修復模型...")
             print("-- 正在初始化 Stable Diffusion Inpainting (可能需要一點時間)...")
+            # StableDiffusionInpaintPipeline: 專門為了**「局部重繪/修復」**設計的模型
             self.pipe = StableDiffusionInpaintPipeline.from_pretrained(
                 "runwayml/stable-diffusion-inpainting",
                 torch_dtype=torch.float16, # 3080 必備，速度快且省顯存
@@ -35,58 +37,6 @@ class SdService:
             # 優化技巧：減少顯存佔用但不影響品質
             self.pipe.enable_attention_slicing()
             print("-- SD 模型載入完成")
-
-    # 用到 OpenCV 的 高斯模糊 (Gaussian Blur)
-    # def process_mask(self, mask_pil_image):
-    #     """
-    #     [C# Note] 
-    #     此方法註冊於類別執行個體下。
-    #     'self' 參數是必須的(身分證)，因為 Python 在呼叫時會隱含傳遞實例本身。
-    #     相當於 C# 中的：public void ProcessMask(Image maskPilImage) { ... }
-    #     在內部存取 pipe 時，必須寫成 self.pipe (等同 this._pipe)。
-    #     """
-    #     """🚀 在修復前先優化 Mask 邊緣"""
-        
-    #     # 1. 將 PIL 轉成 OpenCV 格式
-    #     mask_np = np.array(mask_pil_image.convert('L'))
-        
-    #     # 2. 自動擴張 (Dilation) Mask (非必須，但有時能幫助涵蓋更完整)
-    #     kernel = np.ones((5,5), np.uint8)
-    #     mask_np = cv2.dilate(mask_np, kernel, iterations=1)
-        
-    #     # 3. ✨ 核心步驟：執行高斯模糊 (羽化邊緣)
-    #     # kernel size (例如 15,15) 越大，邊緣越柔和，過渡越自然。根據原圖大小調整。
-    #     # (21, 21) 是模糊半徑，越大邊緣越柔和。
-    #     # 建議根據圖片解析度調整，通常 15~31 之間效果最好
-    #     blurred_mask = cv2.GaussianBlur(mask_np, (21, 21), 0)
-        
-    #     # 4. 轉回 PIL Image 傳給 SD 模型
-    #     return Image.fromarray(blurred_mask)
-
-    # def process_mask(self, mask_pil_image):
-    #     mask_np = np.array(mask_pil_image.convert('L'))
-        
-    #     orig_w, orig_h = mask_pil_image.size
-    #     max_dim = max(orig_w, orig_h)
-
-    #     # 1. 針對大圖，膨脹核要夠大 (改用原圖長邊的 0.5% ~ 1%)
-    #     # 9504 像素下，d_size 約為 47~95
-    #     d_size = max(5, int(max_dim / 150)) 
-    #     kernel = np.ones((d_size, d_size), np.uint8)
-    #     mask_np = cv2.dilate(mask_np, kernel, iterations=2) # 跑兩次確保蓋過雜物
-
-    #     # 2. ✨ 羽化半徑要大幅增加 ✨
-    #     # 9504 像素下，blur_k 建議到 151 以上
-    #     blur_k = int(max_dim / 60) 
-    #     if blur_k % 2 == 0: blur_k += 1
-        
-    #     print(f"-- SD Mask 優化: 尺寸 {max_dim}, 膨脹 {d_size}, 模糊 {blur_k}")
-        
-    #     # 執行高斯模糊
-    #     blurred_mask = cv2.GaussianBlur(mask_np, (blur_k, blur_k), 0)
-        
-    #     return Image.fromarray(blurred_mask)
-
 
     def process_mask(self, mask_pil_image):
         # 1. 轉成 OpenCV 格式 (L 模式)
@@ -213,10 +163,49 @@ class SdService:
     def release_model(self):
         """如果 Ollama 需要空間，就呼叫這個"""
         if self.pipe is not None:
+            try:
+                import torch  # type: ignore
+            except Exception:
+                torch = None
+
             print("-- 釋放 SD 顯存資源...")
             del self.pipe
             self.pipe = None
-            if torch.cuda.is_available():
+            if torch is not None and torch.cuda.is_available():
                 torch.cuda.empty_cache()
+
+    def generate_image(self, prompt: str):
+        """根據文字描述生成圖片"""
+        # 💡 如果目前是 Inpainting 模型，我們需要轉換成生圖模式
+        # 為了省顯存，這裡建議判斷是否需要重新載入
+        self._load_model_for_gen() 
+        
+        print(f"-- 正在根據需求生成圖片: {prompt}")
+        
+        # 執行生成
+        image = self.gen_pipe(
+            prompt=prompt,
+            negative_prompt="low quality, blurry, distorted, text, watermark",
+            num_inference_steps=30,
+            guidance_scale=7.5
+        ).images[0]
+        
+        return image
+
+    def _load_model_for_gen(self):
+        """專門載入生圖用的 Pipeline"""
+        if not hasattr(self, 'gen_pipe') or self.gen_pipe is None:
+            import torch  # type: ignore
+            from diffusers import StableDiffusionPipeline
+
+            print("-- 正在載入 Stable Diffusion 生圖模型...")
+            # 這裡我們可以直接用你現有的 runwayml 模型路徑，它也支援標準生圖
+            # 最標準的**「文字生圖」**模型。它的輸入只有 Prompt (文字描述)
+            self.gen_pipe = StableDiffusionPipeline.from_pretrained(
+                "runwayml/stable-diffusion-v1-5", # 或者指向你本地的路徑
+                torch_dtype=torch.float16,
+                variant="fp16"
+            ).to("cuda")
+            self.gen_pipe.enable_attention_slicing()                
 
 sd_service = SdService()

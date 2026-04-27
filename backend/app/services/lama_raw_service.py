@@ -1,10 +1,12 @@
-import torch
 import numpy as np
 import cv2
 from PIL import Image
 
 class LaMaInpainter:
     def __init__(self, model_path: str):
+        # torch 在不同環境下可能因 DLL 依賴而無法 import；延後到真正需要時才載入
+        import torch  # type: ignore
+
         # 1. 載入模型 (JIT 格式) 到 3080 GPU
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = torch.jit.load(model_path, map_location=self.device)
@@ -18,6 +20,8 @@ class LaMaInpainter:
         return np.pad(img, ((0, pad_h), (0, pad_w), (0, 0)), mode='edge'), (pad_h, pad_w)
 
     def inpaint(self, image_pil: Image.Image, mask_pil: Image.Image):
+        import torch  # type: ignore
+
         # 2. 影像預處理
         img = np.array(image_pil.convert("RGB")).astype(np.float32) / 255.0
         mask = np.array(mask_pil.convert("L")).astype(np.float32) / 255.0
